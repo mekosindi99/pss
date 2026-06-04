@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>سنبلة | نظام إدارة المبيعات</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/recharts@2.12.0/umd/Recharts.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Cairo',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
+input,select,button{font-family:'Cairo',sans-serif}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.15);border-radius:3px}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.spin{animation:spin 1s linear infinite}
+.fadeIn{animation:fadeIn 0.25s ease}
+@media(max-width:768px){.hide-mobile{display:none!important}.show-mobile{display:flex!important}}
+@media(min-width:769px){.show-mobile{display:none!important}}
+@media print{.no-print{display:none!important}body{background:#fff!important;color:#000!important}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const {useState,useEffect,useCallback,createContext,useContext}=React;
+const {AreaChart,Area,BarChart,Bar,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,Legend,Cell}=Recharts;
+
+/* SUPABASE */
+const SB_URL="https://wluwwfgbzwfdxbxcnpyl.supabase.co";
+const SB_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsdXd3ZmdiendmZHhieGNucHlsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzOTczODYsImV4cCI6MjA5NTk3MzM4Nn0.2hEogDdSxKkOqKcU_5-1-PowdS_POAVnIPzmdTbxhuI";
+const api=async(path,opts={})=>{
+  const r=await fetch(`${SB_URL}/rest/v1/${path}`,{
+    headers:{apikey:SB_KEY,Authorization:`Bearer ${SB_KEY}`,"Content-Type":"application/json",Prefer:opts.prefer||"return=representation",...opts.headers},
+    ...opts
+  });
+  if(!r.ok)throw new Error(await r.text());
+  const t=await r.text();return t?JSON.parse(t):null;
+};
+const db={
+  list:(t,q="")=>api(`${t}?${q}&order=created_at.asc`),
+  add:(t,d)=>api(t,{method:"POST",body:JSON.stringify(d)}),
+  set:(t,id,d)=>api(`${t}?id=eq.${id}`,{method:"PATCH",body:JSON.stringify(d)}),
+  del:(t,id)=>api(`${t}?id=eq.${id}`,{method:"DELETE",prefer:"return=minimal"}),
+  ups:(t,d)=>api(t,{method:"POST",body:JSON.stringify(d),headers:{Prefer:"resolution=merge-duplicates,return=representation"}}),
+};
+
+/* HELPERS */
+const fmt=n=>Number(n||0).toLocaleString("en-US");
+const toDay=()=>new Date().toISOString().split("T")[0];
+const todayDisp=()=>new Date().toLocaleDateString("en-GB");
+const getSeason=d=>{const m=new Date(d).getMonth()+1;return[12,1,2].includes(m)?"شتاء":[3,4,5].includes(m)?"ربيع":[6,7,8].includes(m)?"صيف":"خريف";};
+
+/* DEFAULTS */
+const DEF={
+  delivery_zones:[
+    {name:"زاخو",price:3000,cities:["زاخو"]},
+    {name:"مناطق كردستان",price:5000,cities:["أربيل","السليمانية","حلبجة","دهوك","كركوك"]},
+    {name:"المحافظات العراقية",price:5000,cities:["الأنبار (الرمادي)","القادسية (الديوانية)","المثنى (السماوة)","النجف","بابل (الحلة)","بصرة","بغداد","ديالى (بعقوبة)","ذي قار (الناصرية)","صلاح الدين (تكريت)","كربلاء","ميسان (العمارة)","نينوى (الموصل)","واسط (الكوت)"]},
+    {name:"الأهل والبيت",price:0,cities:["الأهل والبيت"]},
+  ],
+  categories:["ملابس_أطفال"],
+  expense_categories:["تخفيضات_البريد","تعبئة اشتراك خط اسيا","تعبئه_كارت_RT"],
+  next_order_id:1,
+};
+
+/* STYLE HELPERS */
+const card=(d)=>({background:d?"rgba(30,41,59,0.9)":"#fff",border:`1px solid ${d?"rgba(255,255,255,0.08)":"#e2e8f0"}`,borderRadius:16,padding:20,boxShadow:"0 4px 20px rgba(0,0,0,0.12)"});
+const inp=(d)=>({width:"100%",padding:"9px 13px",borderRadius:10,border:`1px solid ${d?"rgba(255,255,255,0.12)":"#d1d5db"}`,background:d?"rgba(255,255,255,0.06)":"#fff",color:d?"#e2e8f0":"#1e293b",fontSize:13,fontFamily:"Cairo,sans-serif",outline:"none",boxSizing:"border-box"});
+const btn=(bg="#10b981",fg="#fff")=>({padding:"9px 18px",borderRadius:10,border:"none",background:bg,color:fg,fontSize:13,fontFamily:"Cairo,sans-serif",fontWeight:700,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6,whiteSpace:"nowrap"});
+const lbl=(d)=>({display:"block",fontSize:12,fontWeight:700,color:d?"#94a3b8":"#374151",marginBottom:5});
+
+/* SPINNER */
+const Spinner=()=>(
+  <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:60,gap:12}}>
+    <div className="spin" style={{width:40,height:40,border:"3px solid rgba(255,255,255,0.1)",borderTopColor:"#10b981",borderRadius:"50%"}}/>
+    <p style={{color:"#64748b",fontSize:13}}>جاري التحميل...</p>
+  </div>
+);
+
+/* STAT CARD */
+const StatCard=({label,value,sub,icon,color="#e2e8f0"})=>(
+  <div style={{background:"rgba(30,41,59,0.9)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:16,padding:16}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+      <div><p style={{fontSize:11,color:"#64748b",marginBottom:4}}>{label}</p><p style={{fontSize:22,fontWeight:800,color}}>{fmt(value)}</p>{sub&&<p style={{fontSize:11,color:"#475569",marginTop:3}}>{sub}</p>}</div>
+      {icon&&<span style={{fontSize:24,opacity:0.7}}>{icon}</span>}
+    </div>
+  </div>
+);
+
+/* MODAL */
+const Modal=({open,onClose,title,children,maxW=560})=>{
+  if(!open)return null;
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:999,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.7)"}} onClick={onClose}/>
+      <div className="fadeIn" style={{position:"relative",background:"#1e293b",border:"1px solid rgba(255,255,255,0.1)",borderRadius:20,width:"100%",maxWidth:maxW,maxHeight:"90vh",overflow:"hidden",display:"flex",flexDirection:"column"}}>
+        <div style={{padding:"16px 20px",borderBottom:"1px solid rgba(255,255,255,0.08)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <h3 style={{margin:0,fontSize:16,fontWeight:700,color:"#f1f5f9"}}>{title}</h3>
+          <button onClick={onClose} style={{background:"none",border:"none",color:"#64748b",fontSize:20,cursor:"pointer"}}>✕</button>
+        </div>
+        <div style={{padding:20,overflowY:"auto"}}>{children}</div>
+      </div>
+    </div>
+  );
+};
+
+/* NAV */
+const NAV=[
+  {id:"dashboard",label:"لوحة التحكم",icon:"📊",color:"#38bdf8"},
+  {id:"orders",label:"المبيعات",icon:"📋",color:"#34d399"},
+  {id:"products",label:"المنتجات والمخزون",icon:"📦",color:"#a78bfa"},
+  {id:"expenses",label:"المصروفات",icon:"🧾",color:"#fb923c"},
+  {id:"taxi",label:"تكسي داخلي",icon:"🚕",color:"#fbbf24"},
+  {id:"shipment",label:"وجبة (طيارة/سفينة)",icon:"🚢",color:"#22d3ee"},
+  {id:"reports",label:"التقارير",icon:"📈",color:"#f472b6"},
+  {id:"settings",label:"الإعدادات",icon:"⚙️",color:"#94a3b8"},
+  {id:"backup",label:"النسخ الاحتياطي",icon:"💾",color:"#10b981"},
+];
+
+/* LOGIN */
+function Login({onLogin}){
+  const[id,setId]=useState("");const[pw,setPw]=useState("");const[err,setErr]=useState("");const[show,setShow]=useState(false);
+  const go=e=>{e.preventDefault();if(id==="admin"&&pw==="admin123")onLogin();else setErr("اسم المستخدم أو كلمة المرور غير صحيحة");};
+  return(
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:16,background:"linear-gradient(135deg,#0f172a,#0c1f19,#0f172a)",position:"relative",overflow:"hidden"}}>
+      <div style={{position:"absolute",top:0,right:"25%",width:380,height:380,borderRadius:"50%",background:"radial-gradient(circle,rgba(16,185,129,0.18) 0%,transparent 70%)",pointerEvents:"none"}}/>
+      <div style={{position:"relative",width:"100%",maxWidth:380}}>
+        <div style={{textAlign:"center",marginBottom:32}}>
+          <div style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:80,height:80,borderRadius:24,background:"linear-gradient(135deg,#10b981,#059669)",boxShadow:"0 8px 32px rgba(16,185,129,0.4)",marginBottom:16,fontSize:36}}>🌾</div>
+          <h1 style={{fontSize:40,fontWeight:900,color:"#fff",marginBottom:4}}>سنبلة</h1>
+          <p style={{color:"rgba(52,211,153,0.7)",fontSize:14}}>نظام إدارة المبيعات</p>
+        </div>
+        <div style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:28,padding:32}}>
+          <form onSubmit={go}>
+            <div style={{marginBottom:16}}>
+              <label style={{display:"block",fontSize:13,fontWeight:700,color:"#34d399",marginBottom:8}}>اسم المستخدم</label>
+              <input value={id} onChange={e=>setId(e.target.value)} placeholder="admin" style={{width:"100%",padding:"12px 16px",borderRadius:14,border:"1px solid rgba(255,255,255,0.12)",background:"rgba(255,255,255,0.07)",color:"#fff",fontSize:14,fontFamily:"Cairo,sans-serif",outline:"none",boxSizing:"border-box"}}/>
+            </div>
+            <div style={{marginBottom:16}}>
+              <label style={{display:"block",fontSize:13,fontWeight:700,color:"#34d399",marginBottom:8}}>كلمة المرور</label>
+              <div style={{position:"relative"}}>
+                <input type={show?"text":"password"} value={pw} onChange={e=>setPw(e.target.value)} placeholder="••••••••" style={{width:"100%",padding:"12px 16px",paddingLeft:44,borderRadius:14,border:"1px solid rgba(255,255,255,0.12)",background:"rgba(255,255,255,0.07)",color:"#fff",fontSize:14,fontFamily:"Cairo,sans-serif",outline:"none",boxSizing:"border-box"}}/>
+                <button type="button" onClick={()=>setShow(!show)} style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"#64748b",fontSize:16,cursor:"pointer"}}>{show?"🙈":"👁"}</button>
+              </div>
+            </div>
+            {err&&<div style={{background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:10,padding:"10px 14px",color:"#f87171",fontSize:13,textAlign:"center",marginBottom:16}}>{err}</div>}
+            <button type="submit" style={{width:"100%",padding:14,borderRadius:14,border:"none",background:"linear-gradient(135deg,#10b981,#059669)",color:"#fff",fontSize:15,fontWeight:800,cursor:"pointer",fontFamily:"Cairo,sans-serif"}}>تسجيل الدخول</button>
+          </form>
+          <p style={{textAlign:"center",fontSize:12,color:"#475569",marginTop:16}}>admin / admin123</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* SIDEBAR */
+function Sidebar({page,setPage,lowStock,sync_status,onLogout,lang,setLang,theme,toggleTheme,mobileOpen,setMobileOpen}){
+  const inner=(
+    <div style={{display:"flex",flexDirection:"column",height:"100%",overflow:"hidden"}}>
+      <div style={{padding:"18px 14px",borderBottom:"1px solid rgba(255,255,255,0.06)",flexShrink:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{width:38,height:38,borderRadius:12,background:"linear-gradient(135deg,#10b981,#059669)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>🌾</div>
+          <div><p style={{fontWeight:800,fontSize:14,color:"#fff"}}>pos-sonbola</p><p style={{fontSize:10,color:"rgba(52,211,153,0.6)"}}>نظام إدارة المبيعات</p></div>
+        </div>
+      </div>
+      <div style={{padding:"5px 10px",background:sync_status==="error"?"rgba(239,68,68,0.1)":sync_status==="saving"?"rgba(251,191,36,0.1)":"rgba(16,185,129,0.07)",display:"flex",alignItems:"center",gap:6,fontSize:11,flexShrink:0}}>
+        <div style={{width:7,height:7,borderRadius:"50%",background:sync_status==="error"?"#ef4444":sync_status==="saving"?"#fbbf24":"#10b981"}}/>
+        <span style={{color:sync_status==="error"?"#ef4444":sync_status==="saving"?"#fbbf24":"#10b981"}}>{sync_status==="error"?"خطأ في الحفظ":sync_status==="saving"?"جاري الحفظ...":"✓ محفوظ سحابياً"}</span>
+      </div>
+      <nav style={{flex:1,padding:"8px",overflowY:"auto"}}>
+        {NAV.map(item=>{
+          const active=page===item.id;
+          return(
+            <button key={item.id} onClick={()=>{setPage(item.id);setMobileOpen(false);}} style={{width:"100%",display:"flex",alignItems:"center",gap:10,padding:"9px 10px",borderRadius:12,border:active?`1px solid ${item.color}28`:"1px solid transparent",background:active?`${item.color}14`:"transparent",color:active?item.color:"#94a3b8",marginBottom:2,textAlign:"right",fontSize:13,fontFamily:"Cairo,sans-serif",fontWeight:600,cursor:"pointer"}}>
+              <div style={{width:34,height:34,borderRadius:10,background:active?`${item.color}22`:"rgba(255,255,255,0.05)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:15}}>{item.icon}</div>
+              <span style={{flex:1}}>{item.label}</span>
+              {item.id==="products"&&lowStock>0&&<span style={{background:"#ef4444",color:"#fff",fontSize:10,borderRadius:10,padding:"1px 7px",fontWeight:700}}>{lowStock}</span>}
+              {active&&<div style={{width:7,height:7,borderRadius:"50%",background:item.color,flexShrink:0}}/>}
+            </button>
+          );
+        })}
+      </nav>
+      <div style={{padding:"10px",borderTop:"1px solid rgba(255,255,255,0.05)",flexShrink:0}}>
+        <div style={{display:"flex",gap:5,marginBottom:8}}>
+          {["ar","en"].map(l=><button key={l} onClick={()=>setLang(l)} style={{flex:1,padding:"6px",borderRadius:8,border:"none",background:lang===l?"linear-gradient(135deg,#10b981,#059669)":"rgba(255,255,255,0.05)",color:lang===l?"#fff":"#64748b",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"Cairo,sans-serif"}}>{l==="ar"?"العربية 🇮🇶":"English 🇬🇧"}</button>}
+          <button onClick={toggleTheme} style={{width:32,height:32,borderRadius:8,border:"none",background:theme==="dark"?"linear-gradient(135deg,#f59e0b,#d97706)":"rgba(255,255,255,0.08)",color:"#fff",cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+            {theme==="dark"?"☀️":"🌙"}
+          </button>
+        </div>
+        <button onClick={onLogout} style={{width:"100%",padding:"8px",borderRadius:10,border:"1px solid rgba(239,68,68,0.18)",background:"rgba(239,68,68,0.06)",color:"#f87171",fontSize:12,fontFamily:"Cairo,sans-serif",fontWeight:700,cursor:"pointer"}}>🚪 تسجيل الخروج</button>
+      </div>
+    </div>
+  );
+  return(
+    <>
+      <aside style={{width:230,background:"linear-gradient(180deg,#0b1120,#0d1f18,#0b1120)",borderLeft:"1px solid rgba(255,255,255,0.05)",height:"100vh",position:"sticky",top:0,flexShrink:0}} className="hide-mobile">{inner}</aside>
+      {mobileOpen&&(
+        <div style={{position:"fixed",inset:0,zIndex:200}}>
+          <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.6)"}} onClick={()=>setMobileOpen(false)}/>
+          <aside style={{position:"absolute",right:0,top:0,bottom:0,width:240,background:"linear-gradient(180deg,#0b1120,#0d1f18,#0b1120)"}}>{inner}</aside>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* MAIN APP */
+function App(){
+  const[lang,setLangS]=useState(()=>localStorage.getItem("sb_lang")||"ar");
+  const[theme,setTheme]=useState(()=>localStorage.getItem("sb_theme")||"dark");
+  const setLang=l=>{setLangS(l);localStorage.setItem("sb_lang",l);};
+  const toggleTheme=()=>setTheme(t=>{const n=t==="dark"?"light":"dark";localStorage.setItem("sb_theme",n);return n;});
+  const isDark=theme==="dark";
+  const[authed,setAuthed]=useState(()=>!!localStorage.getItem("sb_auth"));
+  const[page,setPage]=useState("dashboard");
+  const[loading,setLoading]=useState(true);
+  const[syncSt,setSyncSt]=useState("synced");
+  const[dbErr,setDbErr]=useState(null);
+  const[mobileOpen,setMobileOpen]=useState(false);
+  const[products,setProducts]=useState([]);
+  const[orders,setOrders]=useState([]);
+  const[expenses,setExpenses]=useState([]);
+  const[taxis,setTaxis]=useState([]);
+  const[shipments,setShipments]=useState([]);
+  const[settings,setSettings]=useState(DEF);
+
+  const load=useCallback(async()=>{
+    try{setLoading(true);setDbErr(null);
+      const[p,o,e,tx,sh,st]=await Promise.all([db.list("products"),db.list("orders"),db.list("expenses"),db.list("taxi_rides"),db.list("shipments"),db.list("settings","id=eq.1")]);
+      setProducts(p||[]);setOrders((o||[]).map(x=>({...x,items:x.items||[]})));setExpenses(e||[]);setTaxis(tx||[]);setShipments(sh||[]);
+      if(st?.length)setSettings(st[0]);else{await db.ups("settings",{id:1,...DEF});setSettings(DEF);}
+    }catch(e){setDbErr(e.message);}finally{setLoading(false);}
+  },[]);
+
+  useEffect(()=>{if(authed)load();},[authed]);
+
+  const sync=async fn=>{setSyncSt("saving");try{await fn();setSyncSt("synced");}catch(e){setSyncSt("error");alert("خطأ: "+e.message);}};
+
+  if(!authed)return<Login onLogin={()=>{localStorage.setItem("sb_auth","1");setAuthed(true);}}/>;
+
+  const bg=isDark?"#0f172a":"#f1f5f9";
+  const p={products,orders,expenses,taxis,shipments,settings,setProducts,setOrders,setExpenses,setTaxis,setShipments,setSettings,sync,db,load,isDark};
+
+  return(
+    <div dir={lang==="ar"?"rtl":"ltr"} style={{display:"flex",minHeight:"100vh",background:bg,fontFamily:"Cairo,sans-serif"}}>
+      <Sidebar page={page} setPage={setPage} lowStock={products.filter(x=>x.stock<=1).length} sync_status={syncSt} onLogout={()=>{localStorage.removeItem("sb_auth");setAuthed(false);}} lang={lang} setLang={setLang} theme={theme} toggleTheme={toggleTheme} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen}/>
+      <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0}}>
+        <div className="show-mobile" style={{background:"#0b1120",padding:"10px 14px",alignItems:"center",justifyContent:"space-between",borderBottom:"1px solid rgba(255,255,255,0.06)",position:"sticky",top:0,zIndex:100}}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:30,height:30,borderRadius:8,background:"linear-gradient(135deg,#10b981,#059669)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}}>🌾</div><span style={{fontWeight:800,color:"#fff",fontSize:14}}>pos-sonbola</span></div>
+          <button onClick={()=>setMobileOpen(true)} style={{background:"rgba(255,255,255,0.08)",border:"none",borderRadius:8,width:34,height:34,cursor:"pointer",fontSize:18,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}>☰</button>
+        </div>
+        {dbErr&&<div style={{background:"rgba(239,68,68,0.1)",borderBottom:"1px solid rgba(239,68,68,0.2)",padding:"10px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}}><span style={{color:"#f87171",fontSize:13}}>⚠️ {dbErr}</span><button onClick={load} style={btn("#ef4444")}>إعادة المحاولة</button></div>}
+        <main style={{flex:1,padding:16,overflowY:"auto"}}>
+          {loading?<Spinner/>:(
+            <div className="fadeIn">
+              {page==="dashboard"&&<Dashboard {...p} setPage={setPage}/>}
+              {page==="orders"&&<Orders {...p}/>}
+              {page==="products"&&<Products {...p}/>}
+              {page==="expenses"&&<Expenses {...p}/>}
+              {page==="taxi"&&<Taxi {...p}/>}
+              {page==="shipment"&&<Shipment {...p}/>}
+              {page==="reports"&&<Reports {...p}/>}
+              {page==="settings"&&<Settings {...p}/>}
+              {page==="backup"&&<Backup {...p}/>}
+            </div>
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+/* DASHBOARD */
+function Dashboard({products,orders,expenses,taxis,shipments,isDark}){
+  const totalRev=orders.reduce((s,o)=>s+Number(o.total),0);
+  const totalExp=expenses.reduce((s,e)=>s+Number(e.amount),0)+taxis.reduce((s,r)=>s+Number(r.amount),0)+shipments.reduce((s,s2)=>s+Number(s2.amount||0),0);
+  const totalDisc=orders.reduce((s,o)=>s+Number(o.discount||0),0);
+  const netProfit=totalRev-totalExp-totalDisc;
+  const prodProfit=orders.reduce((s,o)=>s+(o.items||[]).reduce((ss,i)=>ss+(i.sellPrice-i.buyPrice)*i.qty,0),0);
+  const taxiTotal=taxis.reduce((s,r)=>s+Number(r.amount),0);
+  const buyTotal=shipments.filter(s=>s.type==="وجبة_شراء").reduce((s,ss)=>s+Number(ss.amount),0);
+  const seaLandTotal=shipments.filter(s=>s.type!=="وجبة_شراء").reduce((s,ss)=>s+Number(ss.amount),0);
+  const generalExp=expenses.reduce((s,e)=>s+Number(e.amount),0);
+  const lowStock=products.filter(p=>p.stock<=1);
+  const avgPerOrder=orders.length?Math.round(netProfit/orders.length):0;
+  const monthly={};
+  orders.forEach(o=>{const m=o.date?.substring(0,7)||"";if(!monthly[m])monthly[m]={month:m,revenue:0,expenses:0};monthly[m].revenue+=Number(o.total);});
+  expenses.forEach(e=>{const m=e.date?.substring(0,7)||"";if(!monthly[m])monthly[m]={month:m,revenue:0,expenses:0};monthly[m].expenses+=Number(e.amount);});
+  const chartData=Object.values(monthly).sort((a,b)=>a.month.localeCompare(b.month));
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+        <h1 style={{fontSize:26,fontWeight:900,color:isDark?"#f1f5f9":"#1e293b"}}>لوحة التحكم</h1>
+        <button onClick={()=>window.print()} style={btn("rgba(255,255,255,0.08)","#94a3b8")}>🖨️ طباعة</button>
+      </div>
+      {lowStock.length>0&&<div style={{background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:12,padding:"12px 16px",display:"flex",alignItems:"center",gap:10,color:"#f87171"}}><span>⚠️</span><div><p style={{fontWeight:700,fontSize:13}}>تنبيه المخزون</p><p style={{fontSize:12,opacity:0.8}}>يوجد {lowStock.length} منتجات وصل مخزونها للحد الأدنى</p></div></div>}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10}}>
+        <StatCard label="إجمالي الإيرادات" value={totalRev} sub="مجموع الطلبيات" icon="💰" color="#10b981"/>
+        <StatCard label="إجمالي المصروفات" value={totalExp} sub="جميع المصروفات" icon="🧾" color="#ef4444"/>
+        <StatCard label="صافي الربح" value={netProfit} sub="الإيرادات − المصروفات" icon="💵" color={netProfit>=0?"#3b82f6":"#ef4444"}/>
+        <StatCard label="ربح الموديلات" value={prodProfit} icon="📈" color="#22c55e"/>
+        <StatCard label="قيمة المخزون" value={products.reduce((s,p)=>s+p.buy_price*p.stock,0)} icon="📦"/>
+        <StatCard label="عدد الطلبيات" value={orders.length} icon="📋"/>
+        <StatCard label="تكسي داخلي" value={taxiTotal} icon="🚕" color="#f59e0b"/>
+        <StatCard label="متوسط ربح/عملية" value={avgPerOrder} icon="📊" color="#10b981"/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:14}}>
+        <div style={card(isDark)}>
+          <p style={{fontWeight:700,fontSize:14,marginBottom:14,color:isDark?"#f1f5f9":"#1e293b"}}>تطور الإيرادات والمصروفات</p>
+          {chartData.length===0?<p style={{color:"#64748b",textAlign:"center",padding:20,fontSize:13}}>لا توجد بيانات</p>:(
+            <ResponsiveContainer width="100%" height={190}>
+              <AreaChart data={chartData}>
+                <defs>
+                  <linearGradient id="gR" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/><stop offset="95%" stopColor="#10b981" stopOpacity={0}/></linearGradient>
+                  <linearGradient id="gE" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#ef4444" stopOpacity={0.3}/><stop offset="95%" stopColor="#ef4444" stopOpacity={0}/></linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)"/>
+                <XAxis dataKey="month" stroke="#64748b" tick={{fontSize:10,fill:"#64748b"}}/>
+                <YAxis stroke="#64748b" tick={{fontSize:10,fill:"#64748b"}} tickFormatter={v=>fmt(v)}/>
+                <Tooltip formatter={v=>fmt(v)} contentStyle={{background:"#1e293b",border:"1px solid rgba(255,255,255,0.1)",borderRadius:8,fontSize:12,fontFamily:"Cairo,sans-serif"}}/>
+                <Legend wrapperStyle={{fontSize:11,fontFamily:"Cairo,sans-serif"}}/>
+                <Area type="monotone" dataKey="revenue" name="الإيرادات" stroke="#10b981" fill="url(#gR)" strokeWidth={2}/>
+                <Area type="monotone" dataKey="expenses" name="المصروفات" stroke="#ef4444" fill="url(#gE)" strokeWidth={2}/>
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+        <div style={card(isDark)}>
+          <p style={{fontWeight:700,fontSize:14,marginBottom:14,color:isDark?"#f1f5f9":"#1e293b"}}>تفاصيل المصروفات</p>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            {[["مصروفات عامة",generalExp,"#e2e8f0"],["تكسي داخلي",taxiTotal,"#f59e0b"],["شراء الوجبة",buyTotal,"#3b82f6"],["شحن (بحري/بري)",seaLandTotal,"#22d3ee"]].map(([l,v,c])=>(
+              <div key={l} style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:"10px 12px"}}>
+                <p style={{fontSize:11,color:"#64748b",marginBottom:3}}>{l}</p>
+                <p style={{fontSize:17,fontWeight:800,color:c}}>{fmt(v)}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ORDERS */
+function Orders({products,orders,setOrders,settings,sync,db,isDark}){
+  const[open,setOpen]=useState(false);
+  const[form,setForm]=useState({province:"",channel:"أهل والبيت",discount:"0",date:toDay(),notes:""});
+  const[cart,setCart]=useState([]);const[selP,setSelP]=useState("");const[qty,setQty]=useState(1);
+  const[saving,setSaving]=useState(false);const[search,setSearch]=useState("");
+  const allProvinces=(settings.delivery_zones||[]).flatMap(z=>z.cities);
+  const deliveryCost=(()=>{for(const z of(settings.delivery_zones||[]))if(z.cities.includes(form.province))return z.price;return 0;})();
+  const subtotal=cart.reduce((s,i)=>s+i.sellPrice*i.qty,0);
+  const buyTotal=cart.reduce((s,i)=>s+i.buyPrice*i.qty,0);
+  const profit=subtotal-buyTotal-(Number(form.discount)||0);
+  const addToCart=()=>{const p=products.find(x=>x.id===Number(selP));if(!p)return;const ex=cart.findIndex(i=>i.productId===p.id);if(ex>=0){const c=[...cart];c[ex].qty+=qty;setCart(c);}else setCart([...cart,{productId:p.id,name:p.name,qty,buyPrice:p.buy_price,sellPrice:p.sell_price}]);setSelP("");setQty(1);};
+  const saveOrder=async()=>{
+    if(!form.province||cart.length===0)return alert("يرجى تحديد المحافظة والمنتجات");
+    setSaving(true);
+    await sync(async()=>{
+      const nextId=settings.next_order_id||orders.length+1;
+      const id=`NO-${String(nextId).padStart(4,"0")}`;
+      const order={id,province:form.province,channel:form.channel,items:cart,total:subtotal,discount:Number(form.discount)||0,delivery_cost:deliveryCost,profit,date:form.date,notes:form.notes};
+      await db.add("orders",order);
+      for(const item of cart){const p=products.find(x=>x.id===item.productId);if(p)await db.set("products",p.id,{stock:Math.max(0,p.stock-item.qty)});}
+      await db.ups("settings",{id:1,...settings,next_order_id:nextId+1});
+      setOrders(prev=>[...prev,order]);
+    });
+    setOpen(false);setCart([]);setForm({province:"",channel:"أهل والبيت",discount:"0",date:toDay(),notes:""});setSaving(false);
+  };
+  const delOrder=async id=>{if(!confirm("حذف هذه الطلبية؟"))return;await sync(async()=>{await db.del("orders",id);setOrders(prev=>prev.filter(o=>o.id!==id));});};
+  const filtered=orders.filter(o=>o.id.toLowerCase().includes(search.toLowerCase())||o.province.includes(search));
+  const totalRev=orders.reduce((s,o)=>s+Number(o.total),0);
+  const totalDisc=orders.reduce((s,o)=>s+Number(o.discount||0),0);
+  const totalProf=orders.reduce((s,o)=>s+Number(o.profit),0);
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+        <h1 style={{fontSize:26,fontWeight:900,color:isDark?"#f1f5f9":"#1e293b"}}>المبيعات</h1>
+        <button onClick={()=>{setOpen(true);setCart([]);setForm({province:"",channel:"أهل والبيت",discount:"0",date:toDay(),notes:""});}} style={btn()}>➕ طلبية جديدة</button>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10}}>
+        {[["مجموع الإيرادات",totalRev,"linear-gradient(135deg,#3b82f6,#1d4ed8)"],["التخفيضات",totalDisc,"linear-gradient(135deg,#f59e0b,#d97706)"],["عدد الطلبيات",orders.length,"linear-gradient(135deg,#374151,#1f2937)"],["الربح الصافي",totalProf,"linear-gradient(135deg,#10b981,#059669)"]].map(([l,v,bg])=>(
+          <div key={l} style={{background:bg,borderRadius:14,padding:14,color:"#fff"}}>
+            <p style={{fontSize:11,opacity:0.8,marginBottom:3}}>{l}</p>
+            <p style={{fontSize:20,fontWeight:900}}>{fmt(v)}</p>
+          </div>
+        ))}
+      </div>
+      <div style={{position:"relative"}}><span style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",color:"#64748b"}}>🔍</span><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="بحث برقم الطلبية أو المحافظة..." style={{...inp(isDark),paddingRight:36}}/></div>
+      <div style={card(isDark)}>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead><tr style={{background:"rgba(255,255,255,0.04)",borderBottom:"1px solid rgba(255,255,255,0.08)"}}>{["رقم الطلبية","المحافظة","القناة","الموديلات","المجموع","التخفيض","الربح","التاريخ","حذف"].map(h=><th key={h} style={{padding:"9px 10px",textAlign:"right",fontWeight:700,color:"#64748b",fontSize:11,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
+            <tbody>
+              {filtered.map((o,i)=>(
+                <tr key={o.id} style={{borderBottom:"1px solid rgba(255,255,255,0.04)",background:i%2?"rgba(255,255,255,0.02)":"transparent"}}>
+                  <td style={{padding:"9px 10px",fontWeight:800,color:"#f87171"}}>{o.id}</td>
+                  <td style={{padding:"9px 10px",color:isDark?"#e2e8f0":"#1e293b"}}>{o.province}</td>
+                  <td style={{padding:"9px 10px"}}><span style={{background:o.channel==="hyperpost"?"rgba(167,139,250,0.15)":"rgba(52,211,153,0.15)",color:o.channel==="hyperpost"?"#a78bfa":"#34d399",padding:"2px 7px",borderRadius:20,fontSize:11,fontWeight:700}}>{o.channel}</span></td>
+                  <td style={{padding:"9px 10px",color:"#64748b",fontSize:11}}>{(o.items||[]).map(i=>`${i.name}×${i.qty}`).join(", ")}</td>
+                  <td style={{padding:"9px 10px",fontWeight:700,color:isDark?"#e2e8f0":"#1e293b"}}>{fmt(o.total)}</td>
+                  <td style={{padding:"9px 10px",color:"#f87171"}}>{fmt(o.discount)}</td>
+                  <td style={{padding:"9px 10px",fontWeight:800,color:"#10b981"}}>{fmt(o.profit)}</td>
+                  <td style={{padding:"9px 10px",color:"#64748b",fontSize:11}}>{o.date}</td>
+                  <td style={{padding:"9px 10px"}}><button onClick={()=>delOrder(o.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:15}}>🗑️</button></td>
+                </tr>
+              ))}
+              {filtered.length===0&&<tr><td colSpan={9} style={{textAlign:"center",padding:40,color:"#64748b"}}>لا توجد طلبيات</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <Modal open={open} onClose={()=>setOpen(false)} title="طلبية جديدة" maxW={560}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+          <div><label style={lbl(true)}>المحافظة</label><select value={form.province} onChange={e=>setForm({...form,province:e.target.value})} style={inp(true)}><option value="">اختر المحافظة...</option>{allProvinces.map(p=><option key={p}>{p}</option>)}</select></div>
+          <div><label style={lbl(true)}>قناة التوصيل</label><select value={form.channel} onChange={e=>setForm({...form,channel:e.target.value})} style={inp(true)}><option value="أهل والبيت">الأهل والبيت</option><option value="hyperpost">HYPERPOST</option><option value="بري">توصيل بري</option><option value="جوي">توصيل جوي</option></select></div>
+          <div><label style={lbl(true)}>التاريخ</label><input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} style={inp(true)}/></div>
+          <div><label style={lbl(true)}>التخفيض</label><input type="number" value={form.discount} onChange={e=>setForm({...form,discount:e.target.value})} style={inp(true)} min="0"/></div>
+        </div>
+        <div style={{marginBottom:12}}><label style={lbl(true)}>ملاحظات</label><input value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="ملاحظات اختيارية..." style={inp(true)}/></div>
+        <div style={{background:"rgba(255,255,255,0.04)",borderRadius:12,padding:12,marginBottom:12}}>
+          <p style={{fontWeight:700,fontSize:13,marginBottom:10,color:"#e2e8f0"}}>إضافة موديل</p>
+          <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+            <select value={selP} onChange={e=>setSelP(e.target.value)} style={{...inp(true),flex:"2 1 150px"}}><option value="">اختر الموديل...</option>{products.map(p=><option key={p.id} value={p.id}>{p.name} — {fmt(p.sell_price)} (مخزون:{p.stock})</option>)}</select>
+            <input type="number" value={qty} onChange={e=>setQty(Number(e.target.value))} style={{...inp(true),flex:"0 0 65px"}} min="1"/>
+            <button onClick={addToCart} style={btn()}>➕</button>
+          </div>
+          {cart.length>0&&<table style={{width:"100%",fontSize:12,borderCollapse:"collapse"}}><thead><tr style={{borderBottom:"1px solid rgba(255,255,255,0.1)"}}>{["الموديل","الكمية","المجموع",""].map(h=><th key={h} style={{padding:"4px 8px",textAlign:"right",color:"#64748b"}}>{h}</th>)}</tr></thead><tbody>{cart.map((item,i)=><tr key={i} style={{borderBottom:"1px solid rgba(255,255,255,0.05)"}}><td style={{padding:"4px 8px",color:"#e2e8f0"}}>{item.name}</td><td style={{padding:"4px 8px"}}>{item.qty}</td><td style={{padding:"4px 8px",fontWeight:700,color:"#10b981"}}>{fmt(item.sellPrice*item.qty)}</td><td><button onClick={()=>setCart(cart.filter((_,idx)=>idx!==i))} style={{background:"none",border:"none",color:"#f87171",cursor:"pointer"}}>✕</button></td></tr>)}</tbody></table>}
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,padding:10,background:"rgba(16,185,129,0.08)",borderRadius:10,marginBottom:14,fontSize:13}}>
+          <div><span style={{color:"#64748b"}}>المجموع: </span><b style={{color:"#e2e8f0"}}>{fmt(subtotal)}</b></div>
+          <div><span style={{color:"#64748b"}}>التوصيل: </span><b style={{color:"#e2e8f0"}}>{fmt(deliveryCost)}</b></div>
+          <div><span style={{color:"#64748b"}}>التخفيض: </span><b style={{color:"#f87171"}}>{fmt(form.discount)}</b></div>
+          <div><span style={{color:"#64748b"}}>الربح: </span><b style={{color:"#10b981"}}>{fmt(profit)}</b></div>
+        </div>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <button onClick={()=>setOpen(false)} style={btn("rgba(255,255,255,0.08)","#94a3b8")}>إلغاء</button>
+          <button onClick={saveOrder} disabled={saving} style={btn(saving?"#475569":"#10b981")}>{saving?"جاري الحفظ...":"💾 حفظ الطلبية"}</button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+/* PRODUCTS */
+function Products({products,setProducts,sync,db,isDark}){
+  const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[delId,setDelId]=useState(null);const[search,setSearch]=useState("");
+  const[form,setForm]=useState({name:"",category:"ملابس_أطفال",season:"شتوي",buy_price:"",sell_price:"",stock:"",min_stock:"1"});
+  const save=async()=>{if(!form.name||!form.buy_price||!form.sell_price)return alert("يرجى ملء الحقول المطلوبة");setSaving(true);const d={name:form.name,category:form.category,season:form.season,buy_price:Number(form.buy_price),sell_price:Number(form.sell_price),stock:Number(form.stock||0),min_stock:Number(form.min_stock||1),added_date:todayDisp()};await sync(async()=>{if(editId){await db.set("products",editId,d);setProducts(prev=>prev.map(p=>p.id===editId?{...p,...d}:p));}else{const res=await db.add("products",d);setProducts(prev=>[...prev,res[0]]);}});setSaving(false);setOpen(false);};
+  const del=async id=>{await sync(async()=>{await db.del("products",id);setProducts(prev=>prev.filter(p=>p.id!==id));});setDelId(null);};
+  const filtered=products.filter(p=>p.name.toLowerCase().includes(search.toLowerCase())||p.category.includes(search));
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+        <h1 style={{fontSize:26,fontWeight:900,color:isDark?"#f1f5f9":"#1e293b"}}>المنتجات والمخزون</h1>
+        <button onClick={()=>{setForm({name:"",category:"ملابس_أطفال",season:"شتوي",buy_price:"",sell_price:"",stock:"",min_stock:"1"});setEditId(null);setOpen(true);}} style={btn()}>➕ إضافة منتج</button>
+      </div>
+      <div style={{position:"relative"}}><span style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",color:"#64748b"}}>🔍</span><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="بحث بالاسم أو الفئة..." style={{...inp(isDark),paddingRight:36}}/></div>
+      <div style={card(isDark)}>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead><tr style={{background:"rgba(255,255,255,0.04)",borderBottom:"1px solid rgba(255,255,255,0.08)"}}>{["الاسم","الفئة","الموسم","سعر الشراء","سعر البيع","المخزون","تاريخ الإضافة","إجراءات"].map(h=><th key={h} style={{padding:"9px 10px",textAlign:"right",fontWeight:700,color:"#64748b",fontSize:11}}>{h}</th>)}</tr></thead>
+            <tbody>
+              {filtered.map((p,i)=>(
+                <tr key={p.id} style={{borderBottom:"1px solid rgba(255,255,255,0.04)",background:i%2?"rgba(255,255,255,0.02)":"transparent"}}>
+                  <td style={{padding:"9px 10px",fontWeight:700,color:isDark?"#f1f5f9":"#1e293b"}}>{p.name}</td>
+                  <td style={{padding:"9px 10px",color:"#64748b"}}>{p.category}</td>
+                  <td style={{padding:"9px 10px"}}><span style={{background:"rgba(59,130,246,0.15)",color:"#60a5fa",padding:"2px 7px",borderRadius:20,fontSize:11,fontWeight:700}}>❄️ {p.season}</span></td>
+                  <td style={{padding:"9px 10px",color:"#64748b"}}>{fmt(p.buy_price)}</td>
+                  <td style={{padding:"9px 10px",fontWeight:700,color:isDark?"#e2e8f0":"#1e293b"}}>{fmt(p.sell_price)}</td>
+                  <td style={{padding:"9px 10px"}}><span style={{background:p.stock===0?"rgba(239,68,68,0.15)":p.stock<=1?"rgba(245,158,11,0.15)":"rgba(16,185,129,0.15)",color:p.stock===0?"#f87171":p.stock<=1?"#fbbf24":"#10b981",padding:"2px 9px",borderRadius:20,fontWeight:800}}>{p.stock}</span></td>
+                  <td style={{padding:"9px 10px",color:"#64748b",fontSize:11}}>{p.added_date}</td>
+                  <td style={{padding:"9px 10px"}}><div style={{display:"flex",gap:6}}><button onClick={()=>{setForm({name:p.name,category:p.category,season:p.season,buy_price:p.buy_price,sell_price:p.sell_price,stock:p.stock,min_stock:p.min_stock||1});setEditId(p.id);setOpen(true);}} style={{background:"none",border:"none",cursor:"pointer",fontSize:15}}>✏️</button><button onClick={()=>setDelId(p.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:15}}>🗑️</button></div></td>
+                </tr>
+              ))}
+              {filtered.length===0&&<tr><td colSpan={8} style={{textAlign:"center",padding:40,color:"#64748b"}}>لا توجد منتجات</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <Modal open={open} onClose={()=>setOpen(false)} title={editId?"تعديل المنتج":"إضافة منتج جديد"}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <div style={{gridColumn:"1/-1"}}><label style={lbl(true)}>اسم الموديل *</label><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="مثال: A302" style={inp(true)}/></div>
+          <div><label style={lbl(true)}>الفئة</label><input value={form.category} onChange={e=>setForm({...form,category:e.target.value})} style={inp(true)}/></div>
+          <div><label style={lbl(true)}>الموسم</label><select value={form.season} onChange={e=>setForm({...form,season:e.target.value})} style={inp(true)}>{["شتوي","ربيعي","صيفي","خريفي"].map(s=><option key={s}>{s}</option>)}</select></div>
+          <div><label style={lbl(true)}>سعر الشراء *</label><input type="number" value={form.buy_price} onChange={e=>setForm({...form,buy_price:e.target.value})} style={inp(true)} min="0"/></div>
+          <div><label style={lbl(true)}>سعر البيع *</label><input type="number" value={form.sell_price} onChange={e=>setForm({...form,sell_price:e.target.value})} style={inp(true)} min="0"/></div>
+          <div><label style={lbl(true)}>المخزون</label><input type="number" value={form.stock} onChange={e=>setForm({...form,stock:e.target.value})} style={inp(true)} min="0"/></div>
+          <div><label style={lbl(true)}>الحد الأدنى للتنبيه</label><input type="number" value={form.min_stock} onChange={e=>setForm({...form,min_stock:e.target.value})} style={inp(true)} min="0"/></div>
+        </div>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:16}}>
+          <button onClick={()=>setOpen(false)} style={btn("rgba(255,255,255,0.08)","#94a3b8")}>إلغاء</button>
+          <button onClick={save} disabled={saving} style={btn(saving?"#475569":"#10b981")}>{saving?"جاري الحفظ...":editId?"💾 حفظ التعديلات":"➕ إضافة المنتج"}</button>
+        </div>
+      </Modal>
+      <Modal open={!!delId} onClose={()=>setDelId(null)} title="تأكيد الحذف" maxW={400}>
+        <p style={{color:"#94a3b8",marginBottom:20}}>هل تريد حذف هذا المنتج نهائياً؟</p>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <button onClick={()=>setDelId(null)} style={btn("rgba(255,255,255,0.08)","#94a3b8")}>إلغاء</button>
+          <button onClick={()=>del(delId)} style={btn("#ef4444")}>🗑️ نعم، احذف</button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+/* EXPENSES */
+function Expenses({expenses,setExpenses,settings,sync,db,isDark}){
+  const[form,setForm]=useState({category:(settings.expense_categories||[])[0]||"",description:"",amount:"",date:toDay(),notes:""});
+  const[editItem,setEditItem]=useState(null);const[delItem,setDelItem]=useState(null);
+  const total=expenses.reduce((s,e)=>s+Number(e.amount),0);
+  const submit=async()=>{if(!form.amount||Number(form.amount)<=0)return alert("يرجى إدخال مبلغ صحيح");await sync(async()=>{if(editItem){await db.set("expenses",editItem.id,{...form,amount:Number(form.amount)});setExpenses(prev=>prev.map(e=>e.id===editItem.id?{...e,...form,amount:Number(form.amount)}:e));}else{const res=await db.add("expenses",{...form,amount:Number(form.amount)});setExpenses(prev=>[...prev,res[0]]);}});setForm({category:(settings.expense_categories||[])[0]||"",description:"",amount:"",date:toDay(),notes:""});setEditItem(null);};
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      <h1 style={{fontSize:26,fontWeight:900,color:isDark?"#f1f5f9":"#1e293b"}}>المصروفات</h1>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(270px,1fr))",gap:16}}>
+        <div style={card(isDark)}>
+          <p style={{fontWeight:700,fontSize:14,marginBottom:14,color:isDark?"#f1f5f9":"#1e293b"}}>{editItem?"تعديل المصروف":"تسجيل مصروف جديد"}</p>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            <div><label style={lbl(isDark)}>التصنيف</label><select value={form.category} onChange={e=>setForm({...form,category:e.target.value})} style={inp(isDark)}>{(settings.expense_categories||[]).map(c=><option key={c}>{c}</option>)}<option value="أخرى">أخرى</option></select></div>
+            <div><label style={lbl(isDark)}>البيان</label><input value={form.description} onChange={e=>setForm({...form,description:e.target.value})} placeholder="وصف المصروف..." style={inp(isDark)}/></div>
+            <div><label style={lbl(isDark)}>المبلغ</label><input type="number" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} style={inp(isDark)} min="0"/></div>
+            <div><label style={lbl(isDark)}>التاريخ</label><input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} style={inp(isDark)}/></div>
+            <div><label style={lbl(isDark)}>ملاحظات</label><input value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} style={inp(isDark)}/></div>
+            <div style={{display:"flex",gap:8}}>
+              {editItem&&<button onClick={()=>{setEditItem(null);setForm({category:(settings.expense_categories||[])[0]||"",description:"",amount:"",date:toDay(),notes:""});}} style={{...btn("rgba(255,255,255,0.08)","#94a3b8"),flex:1}}>إلغاء</button>}
+              <button onClick={submit} style={{...btn(),flex:1}}>{editItem?"💾 حفظ":"✅ تسجيل مصروف"}</button>
+            </div>
+          </div>
+        </div>
+        <div style={card(isDark)}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:14}}><p style={{fontWeight:700,fontSize:14,color:isDark?"#f1f5f9":"#1e293b"}}>سجل المصروفات</p><span style={{color:"#f87171",fontWeight:700,fontSize:13}}>الإجمالي: {fmt(total)}</span></div>
+          {expenses.length===0?<div style={{textAlign:"center",padding:40,color:"#64748b"}}>لا توجد مصروفات مسجلة</div>:(
+            <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:400,overflowY:"auto"}}>
+              {[...expenses].reverse().map(e=>(
+                <div key={e.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 12px",background:"rgba(239,68,68,0.06)",border:"1px solid rgba(239,68,68,0.12)",borderRadius:10}}>
+                  <div><span style={{background:"rgba(239,68,68,0.15)",color:"#f87171",padding:"2px 7px",borderRadius:20,fontSize:11,fontWeight:700}}>{e.category}</span><p style={{fontSize:11,color:"#64748b",marginTop:3}}>{e.description} | {e.date}</p></div>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontWeight:800,color:"#f87171"}}>{fmt(e.amount)}</span><button onClick={()=>{setEditItem(e);setForm({category:e.category,description:e.description||"",amount:e.amount,date:e.date,notes:e.notes||""});}} style={{background:"none",border:"none",cursor:"pointer",fontSize:13}}>✏️</button><button onClick={()=>setDelItem(e.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13}}>🗑️</button></div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <Modal open={!!delItem} onClose={()=>setDelItem(null)} title="تأكيد الحذف" maxW={400}>
+        <p style={{color:"#94a3b8",marginBottom:20}}>هل تريد حذف هذا المصروف؟</p>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <button onClick={()=>setDelItem(null)} style={btn("rgba(255,255,255,0.08)","#94a3b8")}>إلغاء</button>
+          <button onClick={async()=>{await sync(async()=>{await db.del("expenses",delItem);setExpenses(prev=>prev.filter(x=>x.id!==delItem));});setDelItem(null);}} style={btn("#ef4444")}>🗑️ احذف</button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+/* TAXI */
+function Taxi({taxis,setTaxis,sync,db,isDark}){
+  const[form,setForm]=useState({amount:"",date:toDay(),notes:""});const[editItem,setEditItem]=useState(null);const[delItem,setDelItem]=useState(null);
+  const total=taxis.reduce((s,r)=>s+Number(r.amount),0);
+  const submit=async()=>{if(!form.amount||Number(form.amount)<=0)return;await sync(async()=>{if(editItem){await db.set("taxi_rides",editItem.id,{...form,amount:Number(form.amount)});setTaxis(prev=>prev.map(t=>t.id===editItem.id?{...t,...form,amount:Number(form.amount)}:t));}else{const res=await db.add("taxi_rides",{...form,amount:Number(form.amount)});setTaxis(prev=>[...prev,res[0]]);}});setForm({amount:"",date:toDay(),notes:""});setEditItem(null);};
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      <h1 style={{fontSize:26,fontWeight:900,color:isDark?"#f1f5f9":"#1e293b"}}>🚕 تكسي داخلي</h1>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><StatCard label="عدد الرحلات" value={taxis.length} icon="🚕"/><StatCard label="إجمالي المصاريف" value={total} icon="💸" color="#f59e0b"/></div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(270px,1fr))",gap:16}}>
+        <div style={card(isDark)}>
+          <p style={{fontWeight:700,fontSize:14,marginBottom:14,color:isDark?"#f1f5f9":"#1e293b"}}>{editItem?"تعديل الرحلة":"تسجيل رحلة جديدة"}</p>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            <div><label style={lbl(isDark)}>المبلغ</label><input type="number" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} style={inp(isDark)} min="0"/></div>
+            <div><label style={lbl(isDark)}>التاريخ</label><input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} style={inp(isDark)}/></div>
+            <div><label style={lbl(isDark)}>ملاحظات</label><input value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="رقم الطلب أو اسم الزبون" style={inp(isDark)}/></div>
+            <div style={{display:"flex",gap:8}}>
+              {editItem&&<button onClick={()=>{setEditItem(null);setForm({amount:"",date:toDay(),notes:""});}} style={{...btn("rgba(255,255,255,0.08)","#94a3b8"),flex:1}}>إلغاء</button>}
+              <button onClick={submit} style={{...btn(),flex:1}}>{editItem?"💾 حفظ":"✅ تسجيل رحلة"}</button>
+            </div>
+          </div>
+        </div>
+        <div style={card(isDark)}>
+          <p style={{fontWeight:700,fontSize:14,marginBottom:14,color:isDark?"#f1f5f9":"#1e293b"}}>سجل الرحلات</p>
+          {taxis.length===0?<div style={{textAlign:"center",padding:40,color:"#64748b"}}>🚗<br/>لا توجد رحلات</div>:(
+            <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:380,overflowY:"auto"}}>
+              {[...taxis].reverse().map(r=>(
+                <div key={r.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 12px",background:"rgba(245,158,11,0.06)",border:"1px solid rgba(245,158,11,0.12)",borderRadius:10}}>
+                  <div><p style={{fontWeight:700,color:isDark?"#e2e8f0":"#1e293b"}}>{fmt(r.amount)} د.ع</p><p style={{fontSize:11,color:"#64748b"}}>{r.date}{r.notes&&` | ${r.notes}`}</p></div>
+                  <div style={{display:"flex",gap:8}}><button onClick={()=>{setEditItem(r);setForm({amount:r.amount,date:r.date,notes:r.notes||""});}} style={{background:"none",border:"none",cursor:"pointer",fontSize:13}}>✏️</button><button onClick={()=>setDelItem(r.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13}}>🗑️</button></div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <Modal open={!!delItem} onClose={()=>setDelItem(null)} title="تأكيد الحذف" maxW={400}>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:16}}><button onClick={()=>setDelItem(null)} style={btn("rgba(255,255,255,0.08)","#94a3b8")}>إلغاء</button><button onClick={async()=>{await sync(async()=>{await db.del("taxi_rides",delItem);setTaxis(prev=>prev.filter(x=>x.id!==delItem));});setDelItem(null);}} style={btn("#ef4444")}>🗑️ احذف</button></div>
+      </Modal>
+    </div>
+  );
+}
+
+/* SHIPMENT */
+function Shipment({shipments,setShipments,sync,db,isDark}){
+  const[form,setForm]=useState({type:"وجبة_شراء",amount:"",date:toDay(),notes:""});const[editItem,setEditItem]=useState(null);const[delItem,setDelItem]=useState(null);
+  const byType=t=>shipments.filter(s=>s.type===t).reduce((s,ss)=>s+Number(ss.amount),0);
+  const submit=async()=>{if(!form.amount||Number(form.amount)<=0)return;await sync(async()=>{if(editItem){await db.set("shipments",editItem.id,{...form,amount:Number(form.amount)});setShipments(prev=>prev.map(s=>s.id===editItem.id?{...s,...form,amount:Number(form.amount)}:s));}else{const res=await db.add("shipments",{...form,amount:Number(form.amount)});setShipments(prev=>[...prev,res[0]]);}});setForm({type:"وجبة_شراء",amount:"",date:toDay(),notes:""});setEditItem(null);};
+  const tLabel={"وجبة_شراء":"🛒 شراء الوجبة","توصيل_بحري":"🌊 توصيل بحري","توصيل_بري":"🚛 توصيل بري"};
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      <h1 style={{fontSize:26,fontWeight:900,color:isDark?"#f1f5f9":"#1e293b"}}>🚢 وجبة (طيارة وسفينة)</h1>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10}}>
+        <StatCard label="الإجمالي الكلي" value={byType("وجبة_شراء")+byType("توصيل_بحري")+byType("توصيل_بري")} icon="📦"/>
+        <StatCard label="شراء الوجبة" value={byType("وجبة_شراء")} icon="🛒" color="#3b82f6"/>
+        <StatCard label="توصيل بحري" value={byType("توصيل_بحري")} icon="🌊" color="#22d3ee"/>
+        <StatCard label="توصيل بري" value={byType("توصيل_بري")} icon="🚛" color="#f59e0b"/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(270px,1fr))",gap:16}}>
+        <div style={card(isDark)}>
+          <p style={{fontWeight:700,fontSize:14,marginBottom:14,color:isDark?"#f1f5f9":"#1e293b"}}>{editItem?"تعديل":"تسجيل مصاريف وشراء"}</p>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            <div><label style={lbl(isDark)}>النوع</label><select value={form.type} onChange={e=>setForm({...form,type:e.target.value})} style={inp(isDark)}><option value="وجبة_شراء">شراء الوجبة</option><option value="توصيل_بحري">توصيل بحري</option><option value="توصيل_بري">توصيل بري</option></select></div>
+            <div><label style={lbl(isDark)}>المبلغ</label><input type="number" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} style={inp(isDark)} min="0"/></div>
+            <div><label style={lbl(isDark)}>التاريخ</label><input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} style={inp(isDark)}/></div>
+            <div><label style={lbl(isDark)}>ملاحظات</label><input value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} style={inp(isDark)}/></div>
+            <div style={{display:"flex",gap:8}}>
+              {editItem&&<button onClick={()=>{setEditItem(null);setForm({type:"وجبة_شراء",amount:"",date:toDay(),notes:""});}} style={{...btn("rgba(255,255,255,0.08)","#94a3b8"),flex:1}}>إلغاء</button>}
+              <button onClick={submit} style={{...btn(),flex:1}}>{editItem?"💾 حفظ":"✅ تسجيل"}</button>
+            </div>
+          </div>
+        </div>
+        <div style={card(isDark)}>
+          <p style={{fontWeight:700,fontSize:14,marginBottom:14,color:isDark?"#f1f5f9":"#1e293b"}}>سجل الشحنات</p>
+          {shipments.length===0?<div style={{textAlign:"center",padding:40,color:"#64748b"}}>لا توجد سجلات</div>:(
+            <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:380,overflowY:"auto"}}>
+              {[...shipments].reverse().map(s=>(
+                <div key={s.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 12px",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10}}>
+                  <div><span style={{background:"rgba(59,130,246,0.15)",color:"#60a5fa",padding:"2px 7px",borderRadius:20,fontSize:11,fontWeight:700}}>{tLabel[s.type]||s.type}</span><p style={{fontWeight:700,color:isDark?"#e2e8f0":"#1e293b",marginTop:3}}>{fmt(s.amount)} د.ع</p><p style={{fontSize:11,color:"#64748b"}}>{s.date}{s.notes&&` | ${s.notes}`}</p></div>
+                  <div style={{display:"flex",gap:8}}><button onClick={()=>{setEditItem(s);setForm({type:s.type,amount:s.amount,date:s.date,notes:s.notes||""});}} style={{background:"none",border:"none",cursor:"pointer",fontSize:13}}>✏️</button><button onClick={()=>setDelItem(s.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13}}>🗑️</button></div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <Modal open={!!delItem} onClose={()=>setDelItem(null)} title="تأكيد الحذف" maxW={400}>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:16}}><button onClick={()=>setDelItem(null)} style={btn("rgba(255,255,255,0.08)","#94a3b8")}>إلغاء</button><button onClick={async()=>{await sync(async()=>{await db.del("shipments",delItem);setShipments(prev=>prev.filter(x=>x.id!==delItem));});setDelItem(null);}} style={btn("#ef4444")}>🗑️ احذف</button></div>
+      </Modal>
+    </div>
+  );
+}
+
+/* REPORTS */
+function Reports({products,orders,expenses,taxis,shipments,isDark}){
+  const totalRev=orders.reduce((s,o)=>s+Number(o.total),0);
+  const totalExp=expenses.reduce((s,e)=>s+Number(e.amount),0);
+  const totalDisc=orders.reduce((s,o)=>s+Number(o.discount||0),0);
+  const netProfit=totalRev-totalExp-totalDisc;
+  const prodProfit=orders.reduce((s,o)=>s+(o.items||[]).reduce((ss,i)=>ss+(i.sellPrice-i.buyPrice)*i.qty,0),0);
+  const avgPerOrder=orders.length?Math.round(netProfit/orders.length):0;
+  const seasonData={ربيع:0,صيف:0,خريف:0,شتاء:0};
+  orders.forEach(o=>{seasonData[getSeason(o.date||toDay())]+=Number(o.total);});
+  const strongSeason=Object.entries(seasonData).sort((a,b)=>b[1]-a[1])[0]?.[0];
+  const weakSeason=Object.entries(seasonData).sort((a,b)=>a[1]-b[1])[0]?.[0];
+  const monthly={};
+  orders.forEach(o=>{const m=o.date?.substring(0,7)||"";if(!monthly[m])monthly[m]={month:m,revenue:0,expenses:0};monthly[m].revenue+=Number(o.total);});
+  expenses.forEach(e=>{const m=e.date?.substring(0,7)||"";if(!monthly[m])monthly[m]={month:m,revenue:0,expenses:0};monthly[m].expenses+=Number(e.amount);});
+  const monthlyArr=Object.values(monthly).sort((a,b)=>a.month.localeCompare(b.month)).map(d=>({...d,profit:d.revenue-d.expenses}));
+  const topProducts=products.map(p=>({...p,soldQty:orders.reduce((s,o)=>s+(o.items||[]).filter(i=>i.productId===p.id).reduce((ss,i)=>ss+i.qty,0),0),revenue:orders.reduce((s,o)=>s+(o.items||[]).filter(i=>i.productId===p.id).reduce((ss,i)=>ss+i.sellPrice*i.qty,0),0),profit:orders.reduce((s,o)=>s+(o.items||[]).filter(i=>i.productId===p.id).reduce((ss,i)=>ss+(i.sellPrice-i.buyPrice)*i.qty,0),0)})).sort((a,b)=>b.revenue-a.revenue);
+  const provData={};orders.forEach(o=>{if(!provData[o.province])provData[o.province]={province:o.province,orders:0,revenue:0};provData[o.province].orders++;provData[o.province].revenue+=Number(o.total);});
+  const provArr=Object.values(provData).sort((a,b)=>b.revenue-a.revenue);
+  const SC={شتاء:{icon:"❄️",color:"#3b82f6"},ربيع:{icon:"🌱",color:"#22c55e"},صيف:{icon:"☀️",color:"#f59e0b"},خريف:{icon:"🍂",color:"#f97316"}};
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+        <h1 style={{fontSize:26,fontWeight:900,color:isDark?"#f1f5f9":"#1e293b"}}>التقارير المالية</h1>
+        <button onClick={()=>window.print()} style={btn("rgba(255,255,255,0.08)","#94a3b8")}>🖨️ طباعة</button>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10}}>
+        <StatCard label="إجمالي الإيرادات" value={totalRev} icon="💰" color="#10b981"/>
+        <StatCard label="صافي الربح" value={netProfit} icon="💵" color={netProfit>=0?"#3b82f6":"#ef4444"}/>
+        <StatCard label="ربح الموديلات" value={prodProfit} icon="📈" color="#22c55e"/>
+        <StatCard label="متوسط الربح/عملية" value={avgPerOrder} icon="📊" color="#10b981"/>
+        <StatCard label="قيمة المخزون" value={products.reduce((s,p)=>s+p.buy_price*p.stock,0)} icon="📦"/>
+        <StatCard label="إجمالي المصروفات" value={totalExp} icon="🧾" color="#ef4444"/>
+        <StatCard label="التخفيضات" value={totalDisc} icon="🏷️" color="#f59e0b"/>
+        <StatCard label="عدد العمليات" value={orders.length} icon="📋"/>
+      </div>
+      {monthlyArr.length>0&&(
+        <div style={card(isDark)}>
+          <p style={{fontWeight:700,fontSize:14,marginBottom:14,color:isDark?"#f1f5f9":"#1e293b"}}>تطور الإيرادات والمصروفات الشهري</p>
+          <ResponsiveContainer width="100%" height={230}>
+            <BarChart data={monthlyArr}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)"/>
+              <XAxis dataKey="month" stroke="#64748b" tick={{fontSize:10,fill:"#64748b"}}/>
+              <YAxis stroke="#64748b" tick={{fontSize:10,fill:"#64748b"}} tickFormatter={v=>fmt(v)}/>
+              <Tooltip formatter={v=>fmt(v)} contentStyle={{background:"#1e293b",border:"1px solid rgba(255,255,255,0.1)",borderRadius:8,fontSize:12,fontFamily:"Cairo,sans-serif"}}/>
+              <Legend wrapperStyle={{fontSize:11,fontFamily:"Cairo,sans-serif"}}/>
+              <Bar dataKey="revenue" name="الإيرادات" fill="#10b981" radius={[4,4,0,0]}/>
+              <Bar dataKey="expenses" name="المصروفات" fill="#ef4444" radius={[4,4,0,0]}/>
+              <Bar dataKey="profit" name="الربح" fill="#f59e0b" radius={[4,4,0,0]}/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+      <div style={card(isDark)}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"}}>
+          <p style={{fontWeight:700,fontSize:14,color:isDark?"#f1f5f9":"#1e293b"}}>التحليل الموسمي المتقدم</p>
+          {strongSeason&&<span style={{background:"rgba(34,197,94,0.15)",color:"#22c55e",padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>🌟 أقوى موسم: {strongSeason}</span>}
+          {weakSeason&&weakSeason!==strongSeason&&<span style={{background:"rgba(239,68,68,0.15)",color:"#f87171",padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>⚠️ أضعف موسم: {weakSeason}</span>}
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:10}}>
+          {Object.entries(SC).map(([season,cfg])=>(
+            <div key={season} style={{borderRadius:12,padding:14,border:`1px solid ${cfg.color}25`,background:`${cfg.color}10`}}>
+              <p style={{fontWeight:700,marginBottom:5,color:cfg.color}}>{cfg.icon} {season}</p>
+              <p style={{fontSize:20,fontWeight:900,color:seasonData[season]>0?cfg.color:"#94a3b8"}}>{fmt(seasonData[season])}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={card(isDark)}>
+        <p style={{fontWeight:700,fontSize:14,marginBottom:14,color:isDark?"#f1f5f9":"#1e293b"}}>🏆 الموديلات الأكثر مبيعاً</p>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead><tr style={{borderBottom:"1px solid rgba(255,255,255,0.08)"}}>{["#","الموديل","الكمية","الإيرادات","الربح"].map(h=><th key={h} style={{padding:"8px 10px",textAlign:"right",color:"#64748b",fontSize:11}}>{h}</th>)}</tr></thead>
+            <tbody>{topProducts.map((p,i)=>(
+              <tr key={p.id} style={{borderBottom:"1px solid rgba(255,255,255,0.04)"}}>
+                <td style={{padding:"8px 10px"}}><span style={{display:"inline-flex",width:26,height:26,alignItems:"center",justifyContent:"center",borderRadius:"50%",fontSize:11,fontWeight:800,background:i===0?"rgba(245,158,11,0.2)":i===1?"rgba(148,163,184,0.2)":i===2?"rgba(180,120,60,0.2)":"rgba(255,255,255,0.05)",color:i===0?"#f59e0b":i===1?"#94a3b8":i===2?"#b47c3c":"#64748b"}}>{i+1}</span></td>
+                <td style={{padding:"8px 10px",fontWeight:700,color:isDark?"#f1f5f9":"#1e293b"}}>{p.name}</td>
+                <td style={{padding:"8px 10px",color:isDark?"#e2e8f0":"#374151"}}>{p.soldQty}</td>
+                <td style={{padding:"8px 10px",fontWeight:800,color:"#10b981"}}>{fmt(p.revenue)}</td>
+                <td style={{padding:"8px 10px",fontWeight:800,color:"#22c55e"}}>{fmt(p.profit)}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      </div>
+      {provArr.length>0&&(
+        <div style={card(isDark)}>
+          <p style={{fontWeight:700,fontSize:14,marginBottom:14,color:isDark?"#f1f5f9":"#1e293b"}}>📍 تحليل المحافظات</p>
+          <div style={{marginBottom:14}}>
+            <ResponsiveContainer width="100%" height={Math.min(provArr.length*38+40,200)}>
+              <BarChart data={provArr.slice(0,8)} layout="vertical" margin={{right:20,left:90}}>
+                <XAxis type="number" stroke="#64748b" tick={{fontSize:10,fill:"#64748b"}} tickFormatter={v=>fmt(v)}/>
+                <YAxis type="category" dataKey="province" stroke="#64748b" tick={{fontSize:10,fill:"#64748b"}} width={90}/>
+                <Tooltip formatter={v=>fmt(v)} contentStyle={{background:"#1e293b",border:"1px solid rgba(255,255,255,0.1)",borderRadius:8,fontSize:12,fontFamily:"Cairo,sans-serif"}}/>
+                <Bar dataKey="revenue" fill="#10b981" radius={[0,4,4,0]}/>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead><tr style={{borderBottom:"1px solid rgba(255,255,255,0.08)"}}>{["#","المحافظة","الطلبات","الإيرادات"].map(h=><th key={h} style={{padding:"7px 10px",textAlign:"right",color:"#64748b",fontSize:11}}>{h}</th>)}</tr></thead>
+            <tbody>{provArr.map((p,i)=>(
+              <tr key={p.province} style={{borderBottom:"1px solid rgba(255,255,255,0.04)"}}>
+                <td style={{padding:"7px 10px",color:"#64748b"}}>{i+1}</td>
+                <td style={{padding:"7px 10px",fontWeight:700,color:isDark?"#f1f5f9":"#1e293b"}}>{p.province}</td>
+                <td style={{padding:"7px 10px",color:isDark?"#e2e8f0":"#374151"}}>{p.orders}</td>
+                <td style={{padding:"7px 10px",fontWeight:800,color:"#10b981"}}>{fmt(p.revenue)}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* SETTINGS */
+function Settings({settings,setSettings,sync,db,isDark}){
+  const[newZN,setNewZN]=useState("");const[newZP,setNewZP]=useState("");const[newCity,setNewCity]=useState("");const[editZ,setEditZ]=useState(null);const[editZP,setEditZP]=useState("");
+  const[newCat,setNewCat]=useState("");const[newExpCat,setNewExpCat]=useState("");
+  const saveS=async s=>{await sync(async()=>{await db.ups("settings",{id:1,...s});setSettings(s);});};
+  const addZone=async()=>{if(!newZN.trim())return;await saveS({...settings,delivery_zones:[...(settings.delivery_zones||[]),{name:newZN,price:Number(newZP||0),cities:[]}]});setNewZN("");setNewZP("");};
+  const updateZP=async idx=>{const z=[...(settings.delivery_zones||[])];z[idx].price=Number(editZP);await saveS({...settings,delivery_zones:z});setEditZ(null);};
+  const addCity=async idx=>{if(!newCity.trim())return;const z=[...(settings.delivery_zones||[])];z[idx].cities=[...z[idx].cities,newCity.trim()];await saveS({...settings,delivery_zones:z});setNewCity("");};
+  const removeCity=async(zi,ci)=>{const z=[...(settings.delivery_zones||[])];z[zi].cities.splice(ci,1);await saveS({...settings,delivery_zones:z});};
+  const removeZone=async zi=>{if(!confirm("حذف هذه المنطقة؟"))return;await saveS({...settings,delivery_zones:(settings.delivery_zones||[]).filter((_,i)=>i!==zi)});};
+  const resetAll=async()=>{if(!confirm("⚠️ سيتم حذف جميع البيانات نهائياً!"))return;await sync(async()=>{for(const t of["orders","expenses","taxi_rides","shipments","products"])await api(`${t}?id=gte.0`,{method:"DELETE",prefer:"return=minimal"});});window.location.reload();};
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      <h1 style={{fontSize:26,fontWeight:900,color:isDark?"#f1f5f9":"#1e293b"}}>الإعدادات</h1>
+      <div style={card(isDark)}>
+        <p style={{fontWeight:700,fontSize:14,marginBottom:14,color:isDark?"#f1f5f9":"#1e293b"}}>🚚 أسعار التوصيل</p>
+        <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+          <input value={newZN} onChange={e=>setNewZN(e.target.value)} placeholder="اسم المنطقة" style={{...inp(isDark),flex:"2 1 130px"}}/>
+          <input type="number" value={newZP} onChange={e=>setNewZP(e.target.value)} placeholder="السعر" style={{...inp(isDark),flex:"1 1 80px"}}/>
+          <button onClick={addZone} style={btn()}>➕ إضافة</button>
+        </div>
+        {(settings.delivery_zones||[]).map((zone,zi)=>(
+          <div key={zi} style={{marginBottom:14,border:"1px solid rgba(255,255,255,0.08)",borderRadius:12,overflow:"hidden"}}>
+            <div style={{background:"rgba(255,255,255,0.04)",padding:"9px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontWeight:700,color:isDark?"#f1f5f9":"#1e293b"}}>{zone.name}</span>
+              <div style={{display:"flex",alignItems:"center",gap:10}}><span style={{fontSize:11,color:"#64748b"}}>{zone.cities.length} منطقة</span><button onClick={()=>removeZone(zi)} style={{background:"none",border:"none",cursor:"pointer",fontSize:15}}>🗑️</button></div>
+            </div>
+            <div style={{padding:10}}>
+              {editZ===zi?(
+                <div style={{display:"flex",gap:8,marginBottom:10}}>
+                  <input type="number" value={editZP} onChange={e=>setEditZP(e.target.value)} style={{...inp(isDark),flex:1}}/>
+                  <button onClick={()=>updateZP(zi)} style={btn()}>حفظ</button>
+                  <button onClick={()=>setEditZ(null)} style={btn("rgba(255,255,255,0.08)","#94a3b8")}>إلغاء</button>
+                </div>
+              ):(
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 10px",borderRadius:8,marginBottom:10,background:zone.price===0?"rgba(245,158,11,0.1)":"rgba(16,185,129,0.1)"}}>
+                  <span style={{fontWeight:800,color:zone.price===0?"#f59e0b":"#10b981"}}>{zone.price===0?"🎁 مجاني":`${fmt(zone.price)} د.ع`}</span>
+                  <button onClick={()=>{setEditZ(zi);setEditZP(zone.price);}} style={{background:"none",border:"none",color:"#60a5fa",cursor:"pointer",fontSize:12}}>✏️ تعديل السعر</button>
+                </div>
+              )}
+              <div style={{display:"flex",gap:8,marginBottom:8}}>
+                <input value={newCity} onChange={e=>setNewCity(e.target.value)} placeholder="إضافة محافظة..." style={{...inp(isDark),flex:1}}/>
+                <button onClick={()=>addCity(zi)} style={btn()}>➕</button>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:5}}>
+                {zone.cities.map((city,ci)=>(
+                  <div key={ci} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 9px",borderRadius:7,border:"1px solid rgba(255,255,255,0.06)",background:"rgba(255,255,255,0.03)",fontSize:12,color:isDark?"#e2e8f0":"#374151"}}>
+                    <span>{city}</span>
+                    <button onClick={()=>removeCity(zi,ci)} style={{background:"none",border:"none",color:"#f87171",cursor:"pointer",fontSize:11}}>✕</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(270px,1fr))",gap:14}}>
+        <div style={card(isDark)}>
+          <p style={{fontWeight:700,fontSize:14,marginBottom:12,color:isDark?"#f1f5f9":"#1e293b"}}>🏷️ فئات المنتجات</p>
+          <div style={{display:"flex",gap:8,marginBottom:10}}><input value={newCat} onChange={e=>setNewCat(e.target.value)} placeholder="اسم الفئة..." style={{...inp(isDark),flex:1}}/><button onClick={async()=>{if(!newCat.trim())return;await saveS({...settings,categories:[...(settings.categories||[]),newCat.trim()]});setNewCat("");}} style={btn()}>➕</button></div>
+          {(settings.categories||[]).map((c,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 10px",border:"1px solid rgba(255,255,255,0.06)",borderRadius:8,marginBottom:5,fontSize:12,color:isDark?"#e2e8f0":"#374151"}}><span>{c}</span><button onClick={async()=>await saveS({...settings,categories:(settings.categories||[]).filter((_,idx)=>idx!==i)})} style={{background:"none",border:"none",cursor:"pointer",fontSize:13}}>🗑️</button></div>)}
+        </div>
+        <div style={card(isDark)}>
+          <p style={{fontWeight:700,fontSize:14,marginBottom:12,color:isDark?"#f1f5f9":"#1e293b"}}>💵 فئات المصروفات</p>
+          <div style={{display:"flex",gap:8,marginBottom:10}}><input value={newExpCat} onChange={e=>setNewExpCat(e.target.value)} placeholder="اسم الفئة..." style={{...inp(isDark),flex:1}}/><button onClick={async()=>{if(!newExpCat.trim())return;await saveS({...settings,expense_categories:[...(settings.expense_categories||[]),newExpCat.trim()]});setNewExpCat("");}} style={btn()}>➕</button></div>
+          {(settings.expense_categories||[]).map((c,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 10px",border:"1px solid rgba(255,255,255,0.06)",borderRadius:8,marginBottom:5,fontSize:12,color:isDark?"#e2e8f0":"#374151"}}><span>{c}</span><button onClick={async()=>await saveS({...settings,expense_categories:(settings.expense_categories||[]).filter((_,idx)=>idx!==i)})} style={{background:"none",border:"none",cursor:"pointer",fontSize:13}}>🗑️</button></div>)}
+        </div>
+      </div>
+      <div style={{background:"rgba(239,68,68,0.07)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:14,padding:18}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,color:"#f87171",marginBottom:8}}><span style={{fontSize:18}}>⚠️</span><span style={{fontWeight:800,fontSize:14}}>منطقة الخطر — تصفير البيانات</span></div>
+        <p style={{fontSize:12,color:"#64748b",marginBottom:12}}>سيتم حذف جميع البيانات من قاعدة البيانات السحابية نهائياً.</p>
+        <button onClick={resetAll} style={btn("#ef4444")}>🔄 تصفير جميع البيانات</button>
+      </div>
+    </div>
+  );
+}
+
+/* BACKUP */
+function Backup({products,orders,expenses,taxis,shipments,settings,sync,db,load,isDark}){
+  const[msg,setMsg]=useState("");
+  const exportJSON=()=>{const data={products,orders,expenses,taxis,shipments,settings,exportDate:new Date().toISOString()};const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`pos-backup-${toDay()}.json`;a.click();setMsg("✅ تم تحميل ملف النسخة الاحتياطية!");};
+  const importJSON=async e=>{const file=e.target.files?.[0];if(!file)return;e.target.value="";const reader=new FileReader();reader.onload=async ev=>{try{const d=JSON.parse(ev.target.result);if(!confirm("هل تريد استيراد البيانات؟"))return;await sync(async()=>{if(d.products?.length)await db.add("products",d.products.map(p=>({name:p.name,category:p.category,season:p.season,buy_price:p.buy_price||p.buyPrice||0,sell_price:p.sell_price||p.sellPrice||0,stock:p.stock||0,added_date:p.added_date||todayDisp()})));if(d.expenses?.length)await db.add("expenses",d.expenses.map(e=>({category:e.category,description:e.description,amount:e.amount,date:e.date,notes:e.notes})));});await load();setMsg("✅ تم الاستيراد بنجاح!");}catch(err){setMsg("❌ ملف غير صالح: "+err.message);}};reader.readAsText(file);};
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:16,maxWidth:580,margin:"0 auto"}}>
+      <h1 style={{fontSize:26,fontWeight:900,color:isDark?"#f1f5f9":"#1e293b"}}>💾 النسخ الاحتياطي</h1>
+      <div style={{background:"linear-gradient(135deg,#1a73e8,#0f4c96)",borderRadius:18,padding:22,color:"#fff"}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14}}>
+          <div style={{width:48,height:48,background:"rgba(255,255,255,0.2)",borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26}}>☁️</div>
+          <div><p style={{fontWeight:800,fontSize:16}}>Supabase Cloud</p><p style={{fontSize:12,opacity:0.8}}>بياناتك محفوظة تلقائياً على السحابة</p></div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:14}}>
+          {[["المنتجات",products.length],["الطلبات",orders.length],["المصروفات",expenses.length]].map(([label,val])=>(
+            <div key={label} style={{background:"rgba(255,255,255,0.15)",borderRadius:10,padding:"10px 12px",textAlign:"center"}}>
+              <p style={{fontSize:22,fontWeight:900}}>{val}</p>
+              <p style={{fontSize:11,opacity:0.75}}>{label}</p>
+            </div>
+          ))}
+        </div>
+        <button onClick={()=>{setMsg("🔄 جاري التحديث...");load().then(()=>setMsg("✅ تم تحديث البيانات!"));}} style={{width:"100%",padding:11,background:"rgba(255,255,255,0.2)",border:"1px solid rgba(255,255,255,0.3)",borderRadius:10,color:"#fff",cursor:"pointer",fontFamily:"Cairo,sans-serif",fontWeight:700,fontSize:13}}>🔄 تحديث البيانات من السحابة</button>
+      </div>
+      <div style={card(isDark)}>
+        <p style={{fontWeight:700,fontSize:14,marginBottom:4,color:isDark?"#f1f5f9":"#1e293b"}}>🖥️ نسخ احتياطي محلي (JSON)</p>
+        <p style={{fontSize:12,color:"#64748b",marginBottom:14}}>احفظ نسخة على جهازك أو استعد من نسخة سابقة.</p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+          <button onClick={exportJSON} style={{padding:18,borderRadius:12,border:"2px solid rgba(16,185,129,0.3)",background:"rgba(16,185,129,0.05)",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
+            <span style={{fontSize:26}}>⬇️</span>
+            <p style={{fontWeight:700,color:"#10b981",fontFamily:"Cairo,sans-serif",fontSize:13}}>تحميل JSON</p>
+            <p style={{fontSize:11,color:"#64748b",fontFamily:"Cairo,sans-serif"}}>حفظ على الجهاز</p>
+          </button>
+          <label style={{padding:18,borderRadius:12,border:"2px solid rgba(245,158,11,0.3)",background:"rgba(245,158,11,0.05)",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
+            <span style={{fontSize:26}}>⬆️</span>
+            <p style={{fontWeight:700,color:"#f59e0b",fontFamily:"Cairo,sans-serif",fontSize:13}}>استيراد JSON</p>
+            <p style={{fontSize:11,color:"#64748b",fontFamily:"Cairo,sans-serif"}}>استعادة البيانات</p>
+            <input type="file" accept=".json" onChange={importJSON} style={{display:"none"}}/>
+          </label>
+        </div>
+        {msg&&<div style={{padding:"9px 12px",borderRadius:8,background:"rgba(16,185,129,0.1)",color:"#10b981",fontSize:13,fontWeight:700,textAlign:"center"}}>{msg}</div>}
+      </div>
+    </div>
+  );
+}
+
+/* RENDER */
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
